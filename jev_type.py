@@ -1,48 +1,50 @@
 import torch
-import math
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
 dic = {
-  "state": "Customer wants to return a damaged product.",
-  "questions": {
-    "department": {
-      "type": "choice",
-      "choices": ["returns", "shipping", "billing"]
-    },
-    "escalate": {
-      "type": "noul",
-      "instructions": "Does this message request a refund?"
-    },
-    "frustration": {
-      "type": "score",
-      "legend": {
-        "0": "Calm",
-        "1": "Frustrated",
-        "2": "Very angry"
-      }
+    "state": "Customer wants to return a damaged product.",
+    "questions": {
+        "department": {
+            "type": "choice",
+            "instructions": "Choose the department that should handle this request.",
+            "choices": ["returns", "shipping", "billing"]
+        },
+        "escalate": {
+            "type": "noul",
+            "instructions": "Does this message request a refund?"
+        },
+        "frustration": {
+            "type": "score",
+            "instructions": "Rate the customer's level of frustration.",
+            "legend": {
+                "0": "Calm",
+                "1": "Frustrated",
+                "2": "Very angry"
+            }
+        }
     }
-  }
 }
 
 model_name = "Qwen/Qwen3-1.7B"
-tokenizer = AutoTokenizer.from_pretrained(model_name,)
+cache_path = r"E:\abliteration\cache"
+tokenizer = AutoTokenizer.from_pretrained(model_name, cache_dir = cache_path)
 model = AutoModelForCausalLM.from_pretrained(
     model_name,
     dtype=torch.bfloat16,
     device_map="cuda",
+    cache_dir = cache_path
 )
+
 model.eval()
 
 class FormatPrompt:
     @staticmethod
-    def format(state, text, choices, mode="choice"):
-        label = "QUESTION" if mode == "choice" else ("SCORE" if mode == "score" else "INSTRUCTION")
-
+    def format(state, text, choices):
         options = "\n".join( f"{chr(65 + i)}. {choice}" for i, choice in enumerate(choices))
 
         try:
           prompt = f"""STATE: {state}
-          {label}: {text}
+          INSTRUCTION: {text}
           OPTIONS: {options}
           ANSWER:"""
           return prompt
@@ -56,8 +58,8 @@ def get_token_id(text):
     return ids[0]
 
 
-def run(state, text, choices, mode="choice"):
-  prompt = FormatPrompt.format(state, text, [choices], mode)
+def run(state, text, choices):
+  prompt = FormatPrompt.format(state, text, choices)
 
   prompt_ids = tokenizer(prompt, return_tensors="pt").input_ids.to(model.device)
 
@@ -70,7 +72,7 @@ def run(state, text, choices, mode="choice"):
     [ get_token_id(chr(65 + i)) for i in range(len(choices)) ], 
     device=logits.device)
   
-  option_logits = logits[:, option_token_ids]
+  option_logits = logits[:, -1, option_token_ids]
   probabilities = torch.softmax( option_logits.float(), dim=-1 )[0]
   return probabilities
 
@@ -88,20 +90,20 @@ output = {}
 for key, value in dic["questions"].items():
     if value['type'] == 'choice':
         choices = value["choices"]
-        probabilities = run(dic["state"], key, choices, mode="choice")
+        probabilities = run(dic["state"], key, choices)
         result = make_result(choices, probabilities)
         output[key] = {"type": "choice", **result}
 
     if value['type'] == 'noul':
         choices = ["yes", "no"]
-        probabilities = run(dic["state"], value["instructions"], choices, mode="noul")
+        probabilities = run(dic["state"], value["instructions"], choices)
         result = make_result( choices, probabilities )
 
         output[key] = {"type": "noul", "noul": result["probabilities"]["yes"], "probabilities": result["probabilities"] }
 
     if value['type'] == 'score':
         choices = list(value["legend"].keys())
-        probabilities = run(dic["state"], value, choices, mode="score")
+        probabilities = run(dic["state"], value, choices)
         result = make_result( choices, probabilities )
         score = float(sum( int(choice) * probability for choice, probability in result["probabilities"].items()))
         output[key] = {"type": "score", "score": score, "confidence": result["confidence"], "probabilities": result["probabilities"]}
