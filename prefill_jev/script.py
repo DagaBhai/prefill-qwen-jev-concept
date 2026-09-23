@@ -6,9 +6,9 @@ def system_one(state, questions: dict):
         qtype = q["type"]
 
         if qtype == "choice":
-            choices = list(q["criteria"].keys())
+            choices = [[f"{k}: {v}" if v is not None else f"{k}" for k, v in q["criteria"].items()]]
             probabilities = evaluate(state, q["instructions"], choices)
-            result = make_result(choices, probabilities)
+            result = make_result(q["criteria"].keys(), probabilities)
             output[key] = {"type": "choice", **result}
 
         elif qtype == "noul":
